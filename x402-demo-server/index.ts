@@ -26,8 +26,8 @@ import { bazaarResourceServerExtension } from '@x402-avm/extensions';
 import { handleWeatherRequest } from './handlers/weather';
 import { handleAnalyticsRequest, handleAnalyticsReportRequest } from './handlers/analytics';
 import {
+  handleAIQuery,
   handleAIAnalysisRequest,
-  handleAIAnalysisBatchRequest,
 } from './handlers/ai-analysis';
 import {
   handleCreatorContentRequest,
@@ -62,7 +62,7 @@ if (!avmAddress || !facilitatorUrl) {
 }
 
 console.log('\n' + '═'.repeat(60));
-console.log('x402 HACKATHON STARTER KIT');
+console.log('KrishiConnect AI — x402 Resource Server');
 console.log('═'.repeat(60));
 console.log('Configuration:');
 console.log(`  Receiver Address: ${avmAddress}`);
@@ -70,8 +70,40 @@ console.log(`  Facilitator: ${facilitatorUrl}`);
 console.log(`  Port: ${port}`);
 console.log('═'.repeat(60) + '\n');
 
-// Initialize x402 Resource Server
-const facilitatorClient = new HTTPFacilitatorClient({ url: facilitatorUrl });
+/**
+ * Facilitator /supported often 404s or times out (e.g. https://x402.org has no
+ * Algorand liveness API). HTTPFacilitatorClient.getSupported() is invoked by
+ * paymentMiddleware when syncFacilitatorOnStart is true and will reject the
+ * process if it fails. Wrap it with a local fallback so npm start still boots.
+ */
+const ALGORAND_SUPPORTED_FALLBACK = {
+  kinds: [
+    {
+      x402Version: 2,
+      scheme: 'exact',
+      network: ALGORAND_TESTNET_CAIP2,
+    },
+  ],
+  extensions: ['bazaar'],
+  signers: {} as Record<string, string[]>,
+};
+
+class BootSafeFacilitatorClient extends HTTPFacilitatorClient {
+  async getSupported() {
+    try {
+      return await super.getSupported();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        '⚠️ Facilitator getSupported failed (404/connection). Using local Algorand TestNet fallback so the server can boot.\n   ',
+        message,
+      );
+      return ALGORAND_SUPPORTED_FALLBACK;
+    }
+  }
+}
+
+const facilitatorClient = new BootSafeFacilitatorClient({ url: facilitatorUrl });
 const x402Server = new x402ResourceServer(facilitatorClient)
   .register(ALGORAND_TESTNET_CAIP2, new ExactAvmScheme())
   .registerExtension(bazaarResourceServerExtension as unknown as ResourceServerExtension);
@@ -143,7 +175,10 @@ Object.entries(paymentConfig).forEach(([route, config]) => {
 });
 console.log();
 
-app.use(paymentMiddleware(paymentConfig as any, x402Server));
+// 5th arg: syncFacilitatorOnStart = false
+// Skips the mandatory getSupported() liveness call at middleware registration so
+// listen() on PORT 4021 is not blocked by facilitator 404/connection errors.
+app.use(paymentMiddleware(paymentConfig as any, x402Server, undefined, undefined, false));
 
 // ════════════════════════════════════════════════════════════════════
 // ROUTE HANDLERS - Payment-Protected Endpoints
@@ -160,13 +195,15 @@ app.get('/weather', handleWeatherRequest);
 // Meme Generator - Pay $0.1 USDC (Payment Protected)
 app.post('/meme-generate', handleMemeGenerateRequest);
 
+// KrishiConnect AI — Surplus Grain Warehouse Allocation & Logistic Agent ($0.01 USDC)
+app.post('/ai-query', handleAIQuery);
 
 // Example 2: Analytics - Uncomment to enable
 // app.get('/analytics', handleAnalyticsRequest);
 // app.post('/analytics/report', handleAnalyticsReportRequest);
 
-// Example 3: AI Analysis - Uncomment to enable
-// app.post('/ai-analysis', handleAIAnalysisRequest);
+// Legacy aliases
+app.post('/ai-analysis', handleAIAnalysisRequest);
 // app.post('/ai-analysis/batch', handleAIAnalysisBatchRequest);
 
 // Example 4: Creator Content - Uncomment to enable
@@ -186,7 +223,7 @@ app.post('/meme-generate', handleMemeGenerateRequest);
 app.get('/health', (c) => {
   return c.json({
     status: 'ok',
-    service: 'x402-hackathon-starter',
+    service: 'KrishiConnect-ai',
     uptime: process.uptime(),
   });
 });
@@ -197,7 +234,7 @@ app.get('/health', (c) => {
  */
 app.get('/info', (c) => {
   return c.json({
-    service: 'x402-hackathon-starter',
+    service: 'KrishiConnect-ai',
     version: '1.0.0',
     network: 'Algorand TestNet',
     receiver: avmAddress,

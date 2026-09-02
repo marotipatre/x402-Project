@@ -1,85 +1,173 @@
 /**
- * X402 Handler Template - AI Analysis API
+ * KrishiConnect AI — Surplus Grain Warehouse Allocation & Logistic Agent
  *
- * Use case: Pay-per-use AI features
- * Example: Code analysis, content moderation, sentiment analysis, image processing
- *
- * Teams: This is a great example for:
- * - LLM API integration
- * - Image processing services
- * - Content analysis
- * - Code quality analysis
- * - Spam/fraud detection
+ * POST /ai-query is payment-protected ($0.01 Testnet USDC via x402).
+ * After the consumer invoice settles, this handler mock-verifies cargo
+ * allocation, computes remaining silo capacity, and returns a structured
+ * confirmation plus an official gate-pass token.
  */
 
 import type { Context } from 'hono';
 
-/**
- * POST /ai-analysis
- * Analyze content using AI models after payment
- *
- * Request body example:
- * {
- *   "content": "code snippet or text to analyze",
- *   "analysis_type": "code-quality" | "sentiment" | "spam" | "summary"
- * }
- */
-export async function handleAIAnalysisRequest(c: Context) {
-  try {
-    console.log('✓ PAYMENT VERIFIED - POST /ai-analysis handler executing');
+const SILO_CAPACITY_MT: Record<string, number> = {
+  wheat: 42000,
+  rice: 36500,
+  paddy: 28000,
+};
 
-    // Get request body
-    const body = await c.req.json();
-    const { content, analysis_type = 'general' } = body;
+const LIVE_OCCUPIED_MT: Record<string, number> = {
+  wheat: 39280,
+  rice: 35110,
+  paddy: 26140,
+};
 
-    if (!content) {
-      return c.json({ error: 'Content required' }, 400);
-    }
+const SURPLUS_OVERFLOW_MT: Record<string, number> = {
+  wheat: 1840,
+  rice: 1260,
+  paddy: 720,
+};
 
-    // Simulate AI analysis (replace with real LLM API call)
-    const analysis = performAnalysis(content, analysis_type);
-
-    return c.json({
-      input_length: content.length,
-      analysis_type,
-      results: analysis,
-      model: 'gpt-4-turbo',
-      tokens_used: 145,
-      cost_in_usdc: 0.01,
-      paid_via_x402: true,
-      timestamp: new Date().toISOString(),
-    });
-  } catch (error) {
-    console.error('Error in AI analysis:', error);
-    return c.json({ error: 'Analysis failed' }, 500);
+function normalizeCommodity(value: unknown): string {
+  const raw = typeof value === 'string' ? value.trim().toLowerCase() : 'wheat';
+  if (raw === 'rice' || raw === 'paddy' || raw === 'wheat') {
+    return raw;
   }
+  return 'wheat';
+}
+
+function mockVerifyCargo(commodity: string, requestedMetricTons: number) {
+  const capacity = SILO_CAPACITY_MT[commodity] ?? SILO_CAPACITY_MT.wheat;
+  const occupied = LIVE_OCCUPIED_MT[commodity] ?? LIVE_OCCUPIED_MT.wheat;
+  const overflow = SURPLUS_OVERFLOW_MT[commodity] ?? SURPLUS_OVERFLOW_MT.wheat;
+  const availableSiloBalanceMt = Math.max(0, capacity - occupied);
+  const allocatableMt = Math.min(requestedMetricTons, overflow, Math.max(availableSiloBalanceMt, overflow));
+  const verified = allocatableMt > 0;
+
+  return {
+    verified,
+    capacityMt: capacity,
+    occupiedMt: occupied,
+    availableSiloBalanceMt,
+    overflowFacingLimitedStorageMt: overflow,
+    allocatedMetricTons: verified ? allocatableMt : 0,
+    utilizationPct: Number(((occupied / capacity) * 100).toFixed(2)),
+  };
+}
+
+function issueGatePassToken(commodity: string, allocatedMetricTons: number): string {
+  const stamp = Date.now().toString(36).toUpperCase();
+  const crop = commodity.slice(0, 3).toUpperCase();
+  const qty = Math.round(allocatedMetricTons).toString().padStart(4, '0');
+  return `AGRI-GP-${crop}-${qty}-${stamp}`;
 }
 
 /**
- * POST /ai-analysis/batch
- * Analyze multiple items (bulk payment model)
+ * POST /ai-query
+ * Surplus Grain Warehouse Allocation & Logistic Agent
  *
- * Great for high-volume use cases
+ * Request body example:
+ * {
+ *   "commodity": "wheat" | "rice" | "paddy",
+ *   "requestedMetricTons": 250,
+ *   "destinationHub": "Ludhiana FCI Complex"
+ * }
  */
+export async function handleAIQuery(c: Context) {
+  try {
+    console.log('✓ PAYMENT VERIFIED - POST /ai-query Surplus Grain Warehouse Allocation & Logistic Agent');
+
+    let body: Record<string, unknown> = {};
+    try {
+      body = await c.req.json();
+    } catch {
+      body = {};
+    }
+
+    const commodity = normalizeCommodity(body.commodity);
+    const requestedMetricTons = Number(body.requestedMetricTons) > 0 ? Number(body.requestedMetricTons) : 250;
+    const destinationHub =
+      typeof body.destinationHub === 'string' && body.destinationHub.trim()
+        ? body.destinationHub.trim()
+        : 'Ludhiana FCI Surplus Yard';
+
+    const cargo = mockVerifyCargo(commodity, requestedMetricTons);
+    const gatePassToken = cargo.verified
+      ? issueGatePassToken(commodity, cargo.allocatedMetricTons)
+      : null;
+
+    return c.json({
+      status: cargo.verified ? 'ALLOCATION_CONFIRMED' : 'ALLOCATION_DENIED',
+      agent: 'Surplus Grain Warehouse Allocation & Logistic Agent',
+      payment: {
+        tech_fee_usdc: 0.01,
+        asset: 'USDC_TESTNET_ASA_ID',
+        paid_via_x402: true,
+        network: 'Algorand TestNet',
+      },
+      cargo_verification: {
+        mock_verified: cargo.verified,
+        commodity,
+        requested_metric_tons: requestedMetricTons,
+        allocated_metric_tons: cargo.allocatedMetricTons,
+        destination_hub: destinationHub,
+        notes: cargo.verified
+          ? 'Overflow lot cleared for commercial lift to relieve constrained government silo capacity.'
+          : 'No surplus lot available at this hub.',
+      },
+      silo_storage: {
+        capacity_mt: cargo.capacityMt,
+        occupied_mt: cargo.occupiedMt,
+        available_silo_balance_mt: cargo.availableSiloBalanceMt,
+        overflow_facing_limited_storage_mt: cargo.overflowFacingLimitedStorageMt,
+        utilization_pct: cargo.utilizationPct,
+      },
+      logistics: {
+        loading_window: '06:00–14:00 IST next working day',
+        suggested_route: `Farm-gate corridor → ${destinationHub} → designated overflow bay`,
+        vehicle_class: 'Bulk grain trailer (22–28 MT)',
+      },
+      gate_pass_token: gatePassToken,
+      confirmation: cargo.verified
+        ? {
+            message: 'x402 invoice settled. Official gate pass issued for surplus bulk cargo.',
+            valid_for_hours: 24,
+          }
+        : {
+            message: 'Payment settled but no allocatable surplus remains at this silo.',
+            valid_for_hours: 0,
+          },
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error('Error in allocation agent:', error);
+    return c.json({ error: 'Allocation agent failed' }, 500);
+  }
+}
+
+/** @deprecated Use handleAIQuery — kept for template compatibility */
+export async function handleAIAnalysisRequest(c: Context) {
+  return handleAIQuery(c);
+}
+
 export async function handleAIAnalysisBatchRequest(c: Context) {
   try {
     console.log('✓ PAYMENT VERIFIED - POST /ai-analysis/batch handler executing');
 
     const body = await c.req.json();
-    const { items, analysis_type = 'general' } = body;
+    const { items } = body;
 
     if (!Array.isArray(items) || items.length === 0) {
       return c.json({ error: 'Items array required' }, 400);
     }
 
-    const results = items.map(item => ({
-      input: item,
-      analysis: performAnalysis(item, analysis_type),
-    }));
+    const results = items.map((item: { commodity?: string; requestedMetricTons?: number }) => {
+      const commodity = normalizeCommodity(item?.commodity);
+      const requestedMetricTons = Number(item?.requestedMetricTons) > 0 ? Number(item.requestedMetricTons) : 50;
+      return mockVerifyCargo(commodity, requestedMetricTons);
+    });
 
     return c.json({
       batch_size: items.length,
-      analysis_type,
       results,
       total_cost_usdc: 0.01 * items.length,
       paid_via_x402: true,
@@ -90,83 +178,3 @@ export async function handleAIAnalysisBatchRequest(c: Context) {
     return c.json({ error: 'Batch analysis failed' }, 500);
   }
 }
-
-/**
- * Helper function for analysis
- * Replace this with actual LLM API call
- */
-function performAnalysis(
-  content: string,
-  type: string
-): Record<string, unknown> {
-  // Mock analysis results - replace with real API
-  const analyses: Record<string, Record<string, unknown>> = {
-    'code-quality': {
-      score: 78,
-      issues: 3,
-      warnings: [
-        'Missing error handling in line 42',
-        'Unused variable detected',
-      ],
-      suggestions: [
-        'Add try-catch block',
-        'Consider using async/await',
-      ],
-    },
-    'sentiment': {
-      overall: 'positive',
-      score: 0.82,
-      emotions: {
-        joy: 0.6,
-        trust: 0.4,
-        fear: 0.0,
-      },
-    },
-    'spam': {
-      is_spam: false,
-      confidence: 0.99,
-      reasons: [],
-    },
-    'summary': {
-      summary: `Content summarized: "${content.substring(0, 50)}..."`,
-      key_points: [
-        'First main point',
-        'Second main point',
-      ],
-      word_count: content.split(' ').length,
-    },
-  };
-
-  return analyses[type] || analyses['general'] || { raw_analysis: content };
-}
-
-/**
- * Integration Examples:
- *
- * 1. OpenAI API:
- * ──────────────
- * const response = await fetch('https://api.openai.com/v1/chat/completions', {
- *   method: 'POST',
- *   headers: {
- *     'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
- *   },
- *   body: JSON.stringify({
- *     model: 'gpt-4-turbo',
- *     messages: [{ role: 'user', content }],
- *   }),
- * });
- *
- * 2. Hugging Face:
- * ────────────────
- * const response = await fetch(
- *   'https://api-inference.huggingface.co/models/...',
- *   { headers: { Authorization: `Bearer ${HF_TOKEN}` } }
- * );
- *
- * 3. Local Model (Ollama):
- * ────────────────────────
- * const response = await fetch('http://localhost:11434/api/generate', {
- *   method: 'POST',
- *   body: JSON.stringify({ model: 'llama2', prompt: content }),
- * });
- */

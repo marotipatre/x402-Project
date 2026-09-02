@@ -105,6 +105,48 @@ export function createPaymentConfig(avmAddress: string): EndpointConfig {
     },
 
     /**
+     * KrishiConnect AI: Surplus Grain Warehouse Allocation & Logistic Agent
+     * Consumers pay a $0.01 Testnet USDC tech fee to deploy the allocation agent.
+     * Handler: POST /ai-query
+     */
+    'POST /ai-query': {
+      accepts: [
+        {
+          scheme: 'exact',
+          price: '$0.01',
+          network: ALGORAND_TESTNET_CAIP2,
+          payTo: avmAddress,
+          extra: { asset: Number(USDC_TESTNET_ASA_ID) },
+        },
+      ],
+      description: 'Surplus Grain Warehouse Allocation & Logistic Agent',
+      extensions: declareDiscoveryExtension({
+        bodyType: 'json',
+        input: {
+          commodity: 'wheat',
+          requestedMetricTons: 250,
+          destinationHub: 'Ludhiana FCI Complex',
+        },
+        inputSchema: {
+          properties: {
+            commodity: { type: 'string' },
+            requestedMetricTons: { type: 'number' },
+            destinationHub: { type: 'string' },
+          },
+          required: ['commodity'],
+        },
+        output: {
+          example: {
+            status: 'ALLOCATION_CONFIRMED',
+            gatePassToken: 'AGRI-GP-TESTNET-10458941',
+            siloBalanceMt: 18420,
+            paidVia: 'x402 / USDC Algorand Testnet',
+          },
+        },
+      }),
+    },
+
+    /**
      * EXAMPLE 2: Premium Analytics
      * Users pay for detailed analytics or reports
      * Idea: Portfolio analytics, trading stats, DeFi analytics
